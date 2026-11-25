@@ -1,0 +1,57 @@
+name: OneStart AutoCAD 2025
+on:
+  workflow_dispatch:
+  push:
+    branches: [onestart-autocad2025]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore Autodesk reference packages
+        shell: pwsh
+        run: |
+          dotnet new classlib -n AcadRefs -o "$env:RUNNER_TEMP/AcadRefs" -f net8.0
+          dotnet add "$env:RUNNER_TEMP/AcadRefs/AcadRefs.csproj" package AutoCAD.NET --version 25.0.1
+          if ($LASTEXITCODE) { throw "NuGet restore failed" }
+          $cache = (dotnet nuget locals global-packages --list) -replace '^global-packages: ', ''
+          $refs = Join-Path $env:RUNNER_TEMP 'acadrefs'
+          New-Item -ItemType Directory -Force $refs | Out-Null
+          $missing = @()
+          foreach ($name in @('acmgd.dll','acdbmgd.dll','accoremgd.dll','acdbmgdbrep.dll','AcSmComponents.Interop.dll')) {
+            $file = Get-ChildItem $cache -Recurse -File -Filter $name | Where-Object { $_.FullName -match 'autocad\.net[^\\]*\\25\.0\.' } | Select-Object -First 1
+            if ($file) { Copy-Item $file.FullName $refs; Write-Host "Found $name" } else { $missing += $name }
+          }
+          if ($missing.Count) { throw "Missing authorized build references: $($missing -join ', '). No proprietary DLLs will be uploaded." }
+          "ACAD_REFS=$refs/" >> $env:GITHUB_ENV
+      - name: Build native plugin
+        shell: pwsh
+        run: |
+          dotnet build src/AcadMcp.Plugin/AcadMcp.Plugin.csproj -c Release "-p:AcadInstallPath=$env:ACAD_REFS" -o dist/plugin
+          if ($LASTEXITCODE) { throw "Plugin build failed" }
+      - name: Publish backend
+        run: dotnet publish src/AcadMcp.Backend/AcadMcp.Backend.csproj -c Release -r win-x64 --self-contained true -o dist/server
+      - name: Package
+        shell: pwsh
+        run: |
+          if (!(Test-Path dist/plugin/AcadMcp.Plugin.dll)) { throw "Plugin missing" }
+          foreach ($name in @('acmgd.dll','acdbmgd.dll','accoremgd.dll','acdbmgdbrep.dll','AcSmComponents.Interop.dll')) {
+            Get-ChildItem dist -Recurse -File -Filter $name | Remove-Item
+          }
+          Copy-Item -Recurse toolbank-manifests,bin-launchers,validators dist
+          Copy-Item LICENSE,THIRD-PARTY-NOTICES.md,README.md dist
+          Compress-Archive -Path dist/* -DestinationPath Toolbank-AutoCAD2025.zip
+          Get-FileHash Toolbank-AutoCAD2025.zip -Algorithm SHA256 | Format-List | Out-File Toolbank-AutoCAD2025.sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Toolbank-AutoCAD2025
+          path: |
+            Toolbank-AutoCAD2025.zip
+            Toolbank-AutoCAD2025.sha256.txt
+          if-no-files-found: error
