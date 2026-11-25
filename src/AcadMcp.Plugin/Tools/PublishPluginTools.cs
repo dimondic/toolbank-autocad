@@ -559,7 +559,7 @@ internal static class PublishPluginTools
                     if (System.IO.File.Exists(lp))
                     {
                         var lines = System.IO.File.ReadAllLines(lp);
-                        log = " Publisher log: " + string.Join(" | ", lines.Reverse().Take(12).Reverse());
+                        log = " Publisher log: " + string.Join(" | ", System.Linq.Enumerable.Reverse(System.Linq.Enumerable.Take(System.Linq.Enumerable.Reverse(lines), 12)));
                     }
                     else log = " The Publisher wrote no log either.";
                 }
