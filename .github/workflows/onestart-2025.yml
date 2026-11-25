@@ -1,4 +1,4 @@
-name: OneStart AutoCAD 2025
+name: OneStart AutoCAD 2025 (no SheetSets)
 on:
   workflow_dispatch:
   push:
@@ -24,12 +24,26 @@ jobs:
           $refs = Join-Path $env:RUNNER_TEMP 'acadrefs'
           New-Item -ItemType Directory -Force $refs | Out-Null
           $missing = @()
-          foreach ($name in @('acmgd.dll','acdbmgd.dll','accoremgd.dll','acdbmgdbrep.dll','AcSmComponents.Interop.dll')) {
+          foreach ($name in @('acmgd.dll','acdbmgd.dll','accoremgd.dll','acdbmgdbrep.dll')) {
             $file = Get-ChildItem $cache -Recurse -File -Filter $name | Where-Object { $_.FullName -match 'autocad\.net[^\\]*\\25\.0\.' } | Select-Object -First 1
             if ($file) { Copy-Item $file.FullName $refs; Write-Host "Found $name" } else { $missing += $name }
           }
           if ($missing.Count) { throw "Missing authorized build references: $($missing -join ', '). No proprietary DLLs will be uploaded." }
           "ACAD_REFS=$refs/" >> $env:GITHUB_ENV
+      - name: Exclude unavailable SheetSets COM integration
+        shell: pwsh
+        run: |
+          $project = 'src/AcadMcp.Plugin/AcadMcp.Plugin.csproj'
+          [xml]$xml = Get-Content $project -Raw
+          $ref = @($xml.Project.ItemGroup.Reference | Where-Object { $_.Include -eq 'AcSmComponents.Interop' })
+          if ($ref.Count -ne 1) { throw "Unexpected SheetSets reference layout" }
+          $null = $ref[0].ParentNode.RemoveChild($ref[0])
+          $xml.Save((Join-Path (Get-Location) $project))
+          Remove-Item src/AcadMcp.Plugin/Tools/SheetSetsPluginTools.cs
+          $entry = 'src/AcadMcp.Plugin/PluginEntryPoint.cs'
+          $code = Get-Content $entry -Raw
+          if (!$code.Contains('SheetSetsPluginTools.Register(_toolHost);')) { throw "Registration not found" }
+          $code.Replace('SheetSetsPluginTools.Register(_toolHost);','// SheetSets unavailable in cloud build') | Set-Content $entry -Encoding utf8
       - name: Build native plugin
         shell: pwsh
         run: |
@@ -46,12 +60,15 @@ jobs:
           }
           Copy-Item -Recurse toolbank-manifests,bin-launchers,validators dist
           Copy-Item LICENSE,THIRD-PARTY-NOTICES.md,README.md dist
-          Compress-Archive -Path dist/* -DestinationPath Toolbank-AutoCAD2025.zip
-          Get-FileHash Toolbank-AutoCAD2025.zip -Algorithm SHA256 | Format-List | Out-File Toolbank-AutoCAD2025.sha256.txt
+          Remove-Item dist/toolbank-manifests/acad-sheetsets.json -ErrorAction SilentlyContinue
+          Remove-Item dist/bin-launchers/acad-sheetsets.cmd -ErrorAction SilentlyContinue
+          "Experimental build: native SheetSets tools are disabled; related backend tools may report unavailable. Not tested in live AutoCAD. Do not advertise as full 692-tool build." | Set-Content dist/BUILD-LIMITATIONS.txt
+          Compress-Archive -Path dist/* -DestinationPath Toolbank-AutoCAD2025-no-sheetsets.zip
+          Get-FileHash Toolbank-AutoCAD2025-no-sheetsets.zip -Algorithm SHA256 | Format-List | Out-File Toolbank-AutoCAD2025-no-sheetsets.sha256.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Toolbank-AutoCAD2025
+          name: Toolbank-AutoCAD2025-no-sheetsets
           path: |
-            Toolbank-AutoCAD2025.zip
-            Toolbank-AutoCAD2025.sha256.txt
+            Toolbank-AutoCAD2025-no-sheetsets.zip
+            Toolbank-AutoCAD2025-no-sheetsets.sha256.txt
           if-no-files-found: error
